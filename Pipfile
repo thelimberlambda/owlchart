@@ -8,6 +8,8 @@ flake8 = "*"
 ptpython = "*"
 
 [packages]
+matplotlib = "*"
+numpy = "*"
 
 [requires]
 python_version = "3.6"
