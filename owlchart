@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import argparse
 
 
-def fetch_data(fromdate, todate):
+def fetch_owl_data(fromdate, todate):
     try:
         connection = sqlite.connect(config.db_path)
         result = connection.execute((
@@ -42,7 +42,7 @@ def partition_into_days(data):
 
 
 def main(fromdate, todate):
-    data = partition_into_days(fetch_data(fromdate, todate))
+    data = partition_into_days(fetch_owl_data(fromdate, todate))
     data = list(item for item in data if item[0] >= datetime(2019, 12, 17))
     fig, axs = plt.subplots(len(data), 1, constrained_layout=True,
                             figsize=(8.3, 11.7))
