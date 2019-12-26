@@ -10,6 +10,7 @@ ptpython = "*"
 [packages]
 matplotlib = "*"
 numpy = "*"
+scipy = "*"
 
 [requires]
 python_version = "3.6"

@@ -4,20 +4,24 @@
 from config import config
 from datetime import datetime, timedelta
 from collections import defaultdict
+from scipy import stats
 import sqlite3 as sqlite
 import matplotlib.pyplot as plt
+import numpy as np
 import argparse
 
 
 def fetch_owl_data(fromdate, todate):
     try:
-        connection = sqlite.connect(config.db_path)
+        connection = sqlite.connect(config.owl_db_path)
         result = connection.execute((
             'SELECT ' +
             'year, month, day, hour, min, ch1_kw_avg ' +
             'FROM energy_history ' +
-            'WHERE printf("%04d%02d%02d", year, month, day) >= \'{:04d}{:02d}{:02d}\'' +
-            'AND printf("%04d%02d%02d", year, month, day) < \'{:04d}{:02d}{:02d}\''
+            'WHERE printf("%04d%02d%02d", year, month, day)' +
+            ' >= \'{:04d}{:02d}{:02d}\'' +
+            'AND printf("%04d%02d%02d", year, month, day)' +
+            ' < \'{:04d}{:02d}{:02d}\''
         ).format(
             fromdate.year,
             fromdate.month,
@@ -33,6 +37,32 @@ def fetch_owl_data(fromdate, todate):
             connection.close()
 
 
+def fetch_captured_data(fromdate, todate):
+    try:
+        connection = sqlite.connect(config.captured_db_path)
+        result = connection.execute((
+            'SELECT ' +
+            'year, month, day, hour, min, ch3_kwh, ch9_kwh ' +
+            'FROM energy_history ' +
+            'WHERE printf("%04d%02d%02d", year, month, day)' +
+            '>= \'{:04d}{:02d}{:02d}\'' +
+            'AND printf("%04d%02d%02d", year, month, day)' +
+            ' < \'{:04d}{:02d}{:02d}\''
+        ).format(
+            fromdate.year,
+            fromdate.month,
+            fromdate.day,
+            todate.year,
+            todate.month,
+            todate.day
+        ))
+        for (year, month, day, hour, min_, mains_a, mains_b) in result:
+            yield (datetime(year, month, day, hour, min_), mains_a, mains_b)
+    finally:
+        if 'connection' in locals() and connection:
+            connection.close()
+
+
 def partition_into_days(data):
     parts = defaultdict(list)
     for r in data:
@@ -41,26 +71,70 @@ def partition_into_days(data):
     return sorted(parts.items(), key=lambda i: i[0])
 
 
+def convert_to_hours(datetimes):
+    return [dt.hour+float(dt.minute)/60 for dt in datetimes]
+
+
+def get_slope_and_intercept(xvalues, yvalues):
+    (slope, intercept, *_) = stats.linregress(xvalues, yvalues)
+    return (slope, intercept)
+
+
+def normalise_captured_data(datetimes, values):
+    (slope, intercept) = get_slope_and_intercept(
+        convert_to_hours(datetimes), values)
+    return [v-intercept for v in values]
+
+
 def main(fromdate, todate):
-    data = partition_into_days(fetch_owl_data(fromdate, todate))
-    data = list(item for item in data if item[0] >= datetime(2019, 12, 17))
-    fig, axs = plt.subplots(len(data), 1, constrained_layout=True,
+    owl_data = partition_into_days(fetch_owl_data(fromdate, todate))
+    captured_data = dict(partition_into_days(
+        fetch_captured_data(fromdate, todate)))
+    owl_data = list(
+        item for item in owl_data if item[0] >= datetime(2019, 12, 17))
+    fig, axs = plt.subplots(len(owl_data), 2, constrained_layout=True,
                             figsize=(8.3, 11.7))
 
-    for ax, dayd in zip(axs, data):
+    for ax, dayd in zip(axs, owl_data):
         (xdata, kwatt) = zip(*dayd[1])
         the_day = dayd[0]
         the_next_day = dayd[0] + timedelta(days=1)
+        if the_day in captured_data:
+            (cxdata, mains_a, mains_b) = zip(*captured_data[the_day])
+            mains_a = normalise_captured_data(cxdata, mains_a)
+            mains_b = normalise_captured_data(cxdata, mains_b)
+            (slope_a, intercept_a, *_) = stats.linregress(convert_to_hours(cxdata),
+                                                      mains_a)
+            (slope_b, intercept_b, *_) = stats.linregress(convert_to_hours(cxdata),
+                                                      mains_b)
+            ax[1].set_xlim([the_day, the_next_day])
+            ax[1].set_ylim([0, 40])
+            ax[1].plot(cxdata, mains_a, 'o-')
+            ax[1].plot(cxdata, mains_b, '*-')
+            xhours = np.linspace(0, 24, 12)
+            cxday = [the_day + timedelta(hours=h) for h in xhours]
+            ax[1].plot(cxday, [h*slope_a+intercept_a for h in xhours], '--')
+            ax[1].plot(cxday, [h*slope_b+intercept_b for h in xhours], '--')
+            ax[1].set_xticks([timedelta(hours=h) + the_day for h in range(25)])
+            ax[1].set_xticklabels(range(25))
+            ax[1].set_title("Captured (~{:.1f}kWh, {:.1f}kWh)".format(
+                24*slope_a+intercept_a,
+                24*slope_b+intercept_b))
+            for l in ax[1].get_xticklabels():
+                l.set_rotation(90)
+                l.set_horizontalalignment('center')
         total_kw = sum(kwatt) / 1000.0
-        ax.set_title(the_day.strftime("%A %d %b %Y") +
-                     " ({:.1f}kWh)".format(total_kw))
-        ax.set_xlim([the_day, the_next_day])
-        ax.set_ylim([0, 8000])
-        ax.set_yticks([0, 2000, 4000, 6000, 8000])
-        ax.plot(xdata, [kw*60 for kw in kwatt])
-        for l in ax.get_xticklabels():
-            l.set_rotation(40)
-            l.set_horizontalalignment('right')
+        ax[0].set_title(the_day.strftime("%A %d %b %Y") +
+                        " ({:.1f}kWh)".format(total_kw))
+        ax[0].set_xlim([the_day, the_next_day])
+        ax[0].set_ylim([0, 8000])
+        ax[0].set_yticks([0, 2000, 4000, 6000, 8000])
+        ax[0].set_xticks([timedelta(hours=h) + the_day for h in range(25)])
+        ax[0].set_xticklabels(range(25))
+        ax[0].plot(xdata, [kw*60 for kw in kwatt])
+        for l in ax[0].get_xticklabels():
+            l.set_rotation(90)
+            l.set_horizontalalignment('center')
 
     plt.savefig('energy-{:%Y-%m-%d}-to-{:%Y-%m-%d}.svg'.format(
         fromdate,
