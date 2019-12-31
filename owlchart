@@ -21,7 +21,8 @@ def fetch_owl_data(fromdate, todate):
             'WHERE printf("%04d%02d%02d", year, month, day)' +
             ' >= \'{:04d}{:02d}{:02d}\'' +
             'AND printf("%04d%02d%02d", year, month, day)' +
-            ' < \'{:04d}{:02d}{:02d}\''
+            ' < \'{:04d}{:02d}{:02d}\' ' +
+            'ORDER BY year, month, day, hour, min;'
         ).format(
             fromdate.year,
             fromdate.month,
